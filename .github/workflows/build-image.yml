@@ -72,4 +72,4 @@ jobs:
           file: mastodon/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          outputs: type=image,"name=${{ matrix.platform }}",push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,"name=${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}",push-by-digest=true,name-canonical=true,push=true
