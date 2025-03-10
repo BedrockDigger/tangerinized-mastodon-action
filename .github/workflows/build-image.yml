@@ -70,7 +70,7 @@ jobs:
         with:
           context: mastodon
           file: mastodon/Dockerfile
-          archs: linux/${{ matrix.arch }}
+          platforms: linux/${{ matrix.arch }}
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest-linux-${{ matrix.arch }}
