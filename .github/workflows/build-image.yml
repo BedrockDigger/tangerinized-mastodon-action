@@ -72,6 +72,4 @@ jobs:
           file: mastodon/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           outputs: type=image,"name=${{ matrix.platform }}",push-by-digest=true,name-canonical=true,push=true
