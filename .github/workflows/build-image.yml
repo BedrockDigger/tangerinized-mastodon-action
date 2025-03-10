@@ -72,6 +72,8 @@ jobs:
           file: mastodon/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:${{ needs.check-for-release.outputs.tag }}
+          tags: |
+            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest
+            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:${{ needs.check-for-release.outputs.tag }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
