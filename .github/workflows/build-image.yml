@@ -32,12 +32,12 @@ jobs:
   build-and-push:
     needs: check-for-release
     if: ${{ needs.check-for-release.outputs.found_new_release == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ startsWith(matrix.arch, 'arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ startsWith(matrix.platform, 'linux/arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       matrix:
-        arch:
-          - amd64
-          - arm64
+        platform:
+          - linux/amd64
+          - linux/arm64
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,15 +65,13 @@ jobs:
           cp -r ./tgui/mastodon/app/javascript/styles/* ./mastodon/app/javascript/styles
           echo -e "tangerineui: styles/tangerineui.scss\ntangerineui-purple: styles/tangerineui-purple.scss\ntangerineui-cherry: styles/tangerineui-cherry.scss\ntangerineui-lagoon: styles/tangerineui-lagoon.scss" >> ./mastodon/config/themes.yml
 
-      - name: Build and push Docker image for ${{ matrix.arch }}
+      - name: Build and push Docker image for ${{ matrix.platform }}
         uses: docker/build-push-action@v6
         with:
           context: mastodon
           file: mastodon/Dockerfile
-          platforms: linux/${{ matrix.arch }}
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest-linux-${{ matrix.arch }}
-            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:${{ needs.check-for-release.outputs.tag }}-linux-${{ matrix.arch }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          outputs: type=image,"name=${{ matrix.platform }}",push-by-digest=true,name-canonical=true,push=true
