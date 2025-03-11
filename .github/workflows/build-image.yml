@@ -17,7 +17,7 @@ jobs:
           echo "The latest release is $GITHUB_TAG"
           echo "tag=$GITHUB_TAG" >> $GITHUB_OUTPUT
           DOCKERHUB_ACCESS_TOKEN=$(curl -s --location 'https://hub.docker.com/v2/auth/token' --header 'Content-Type: application/json' --data '{"identifier":"${{ secrets.DOCKERHUB_USERNAME }}","secret":"${{ secrets.DOCKERHUB_TOKEN }}"}' | jq '.access_token')
-          DOCKERHUB_TAG=$(curl -s --location 'https://hub.docker.com/v2/namespaces/${{ secrets.DOCKERHUB_NAMESPACE }}/repositories/${{ secrets.DOCKERHUB_REPOSITORY}}/tags' --header 'Authorization: $DOCKERHUB_ACCESS_TOKEN' | jq '.results[1].name')
+          DOCKERHUB_TAG=$(curl -s --location 'https://hub.docker.com/v2/namespaces/${{ secrets.DOCKERHUB_NAMESPACE }}/repositories/${{ secrets.DOCKERHUB_REPOSITORY}}/tags' --header 'Authorization: $DOCKERHUB_ACCESS_TOKEN' | jq -r '.results[1].name')
           echo "The latest Docker Hub tag is $DOCKERHUB_TAG"
           if [ "$GITHUB_TAG" != "$DOCKERHUB_TAG" ]; then
             echo "found_new_release=true" >> $GITHUB_OUTPUT
