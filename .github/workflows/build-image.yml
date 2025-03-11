@@ -2,7 +2,7 @@ name: Build Mastodon Docker Images
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 20 * * *"
 jobs:
   check-for-release:
     runs-on: ubuntu-latest
