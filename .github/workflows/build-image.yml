@@ -1,10 +1,8 @@
 name: Build Mastodon Docker Images
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 0 * * *"
-
 jobs:
   check-for-release:
     runs-on: ubuntu-latest
@@ -18,61 +16,98 @@ jobs:
           GITHUB_TAG=$(curl -s https://api.github.com/repos/mastodon/mastodon/releases/latest | jq -r '.tag_name')
           echo "The latest release is $GITHUB_TAG"
           echo "tag=$GITHUB_TAG" >> $GITHUB_OUTPUT
-
           DOCKERHUB_ACCESS_TOKEN=$(curl -s --location 'https://hub.docker.com/v2/auth/token' --header 'Content-Type: application/json' --data '{"identifier":"${{ secrets.DOCKERHUB_USERNAME }}","secret":"${{ secrets.DOCKERHUB_TOKEN }}"}' | jq '.access_token')
           DOCKERHUB_TAG=$(curl -s --location 'https://hub.docker.com/v2/namespaces/${{ secrets.DOCKERHUB_NAMESPACE }}/repositories/${{ secrets.DOCKERHUB_REPOSITORY}}/tags' --header 'Authorization: $DOCKERHUB_ACCESS_TOKEN' | jq '.results[1].name')
           echo "The latest Docker Hub tag is $DOCKERHUB_TAG"
-
           if [ "$GITHUB_TAG" != "$DOCKERHUB_TAG" ]; then
             echo "found_new_release=true" >> $GITHUB_OUTPUT
           else
             echo "found_new_release=false" >> $GITHUB_OUTPUT
           fi
-
-  build-and-push:
+  build:
     needs: check-for-release
     if: ${{ needs.check-for-release.outputs.found_new_release == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ startsWith(matrix.platform, 'linux/arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - linux/amd64
           - linux/arm64
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - uses: actions/checkout@v4
         with:
           repository: mastodon/mastodon
           ref: ${{ needs.check-for-release.outputs.tag }}
           path: mastodon
-
       - uses: actions/checkout@v4
         with:
           repository: nileane/TangerineUI-for-Mastodon
           ref: main
           path: tgui
-
       - name: Copy Tangerine UI files to mastodon folder and configure themes.yml
         run: |
           cp -r ./tgui/mastodon/app/javascript/styles/* ./mastodon/app/javascript/styles
           echo -e "tangerineui: styles/tangerineui.scss\ntangerineui-purple: styles/tangerineui-purple.scss\ntangerineui-cherry: styles/tangerineui-cherry.scss\ntangerineui-lagoon: styles/tangerineui-lagoon.scss" >> ./mastodon/config/themes.yml
-
-      - name: Build and push Docker image for ${{ matrix.platform }}
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: mastodon
           file: mastodon/Dockerfile
           platforms: ${{ matrix.platform }}
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest
-            ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:${{ needs.check-for-release.outputs.tag }}
-          outputs: type=image,"name=${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}",push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ github.ref_name }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          tags: ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}
+          no-cache: true
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+  merge:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest \
+            -t ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:${{ needs.check-for-release.outputs.tag }} \
+            $(printf '${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}@sha256:%s ' *)
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest
