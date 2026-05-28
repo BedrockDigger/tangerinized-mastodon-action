@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 20 * * *"
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}
+
 jobs:
   check-for-release:
     runs-on: ubuntu-latest
@@ -12,21 +16,33 @@ jobs:
     steps:
       - name: Check for new Mastodon release
         id: check-for-release
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_REPOSITORY: ${{ secrets.DOCKERHUB_REPOSITORY }}
         run: |
-          GITHUB_TAG=$(curl -s https://api.github.com/repos/mastodon/mastodon/releases/latest | jq -r '.tag_name')
+          GITHUB_TAG=$(curl -sf https://api.github.com/repos/mastodon/mastodon/releases/latest | jq -r '.tag_name')
           echo "The latest release is $GITHUB_TAG"
           echo "tag=$GITHUB_TAG" >> $GITHUB_OUTPUT
-          DOCKERHUB_ACCESS_TOKEN=$(curl -s --location 'https://hub.docker.com/v2/auth/token' --header 'Content-Type: application/json' --data '{"identifier":"${{ secrets.DOCKERHUB_USERNAME }}","secret":"${{ secrets.DOCKERHUB_TOKEN }}"}' | jq '.access_token')
-          DOCKERHUB_TAG=$(curl -s --location 'https://hub.docker.com/v2/namespaces/${{ secrets.DOCKERHUB_NAMESPACE }}/repositories/${{ secrets.DOCKERHUB_REPOSITORY}}/tags' --header 'Authorization: $DOCKERHUB_ACCESS_TOKEN' | jq -r '.results[1].name')
+
+          DOCKERHUB_ACCESS_TOKEN=$(curl -sf --location 'https://hub.docker.com/v2/auth/token' \
+            --header 'Content-Type: application/json' \
+            --data "{\"identifier\":\"${DOCKERHUB_USERNAME}\",\"secret\":\"${DOCKERHUB_TOKEN}\"}" | jq -r '.access_token')
+
+          DOCKERHUB_TAG=$(curl -sf --location "https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/repositories/${DOCKERHUB_REPOSITORY}/tags" \
+            --header "Authorization: Bearer $DOCKERHUB_ACCESS_TOKEN" | jq -r '.results[1].name')
           echo "The latest Docker Hub tag is $DOCKERHUB_TAG"
+
           if [ "$GITHUB_TAG" != "$DOCKERHUB_TAG" ]; then
             echo "found_new_release=true" >> $GITHUB_OUTPUT
           else
             echo "found_new_release=false" >> $GITHUB_OUTPUT
           fi
+
   build:
     needs: check-for-release
-    if: ${{ needs.check-for-release.outputs.found_new_release == 'true' || github.event_name == 'workflow_dispatch' }}
+    if: needs.check-for-release.outputs.found_new_release == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -41,27 +57,50 @@ jobs:
         run: |
           platform=${{ matrix.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - uses: actions/checkout@v4
+
+      - name: Checkout Mastodon
+        uses: actions/checkout@v4
         with:
           repository: mastodon/mastodon
           ref: ${{ needs.check-for-release.outputs.tag }}
           path: mastodon
-      - uses: actions/checkout@v4
+
+      - name: Checkout TangerineUI
+        uses: actions/checkout@v4
         with:
           repository: nileane/TangerineUI-for-Mastodon
           ref: main
           path: tgui
-      - name: Copy Tangerine UI files to mastodon folder and configure themes.yml
+
+      - name: Copy Tangerine UI files and configure themes
         run: |
           cp -r ./tgui/mastodon/app/javascript/styles/* ./mastodon/app/javascript/styles
-          echo -e "tangerineui: styles/tangerineui.scss\ntangerineui-purple: styles/tangerineui-purple.scss\ntangerineui-cherry: styles/tangerineui-cherry.scss\ntangerineui-lagoon: styles/tangerineui-lagoon.scss" >> ./mastodon/config/themes.yml
+          cat >> ./mastodon/config/themes.yml <<'EOF'
+          tangerineui: styles/tangerineui.scss
+          tangerineui-purple: styles/tangerineui-purple.scss
+          tangerineui-cherry: styles/tangerineui-cherry.scss
+          tangerineui-lagoon: styles/tangerineui-lagoon.scss
+          EOF
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -71,13 +110,16 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ github.ref_name }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          tags: ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}
-          no-cache: true
+          tags: ${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ env.PLATFORM_PAIR }}
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ env.PLATFORM_PAIR }},mode=max
+
       - name: Export digest
         run: |
           mkdir -p ${{ runner.temp }}/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
@@ -85,6 +127,7 @@ jobs:
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
+
   merge:
     runs-on: ubuntu-latest
     needs:
@@ -92,45 +135,44 @@ jobs:
       - build
     if: always() && needs.build.result == 'success'
     steps:
-      - name: Set release tag
-        run: echo "RELEASE_TAG=${{ needs.check-for-release.outputs.tag }}" >> $GITHUB_ENV
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
+        env:
+          RELEASE_TAG: ${{ needs.check-for-release.outputs.tag }}
         run: |
-          # First check if we have any digest files
           if [ -z "$(ls -A)" ]; then
-            echo "No digest files found, cannot create manifest"
+            echo "::error::No digest files found, cannot create manifest"
             exit 1
           fi
-          
-          # Create tag arguments
-          TAG_ARGS="-t ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest"
-          
-          # Only add version tag if we have a valid release tag
+
+          TAG_ARGS="-t ${{ env.IMAGE_NAME }}:latest"
+
           if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "null" ]; then
-            TAG_ARGS="$TAG_ARGS -t ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:$RELEASE_TAG"
+            TAG_ARGS="$TAG_ARGS -t ${{ env.IMAGE_NAME }}:$RELEASE_TAG"
           fi
-          
-          # Create manifest with digest files
-          DIGEST_ARGS=$(printf '${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}@sha256:%s ' *)
-          
-          # Run the command
+
+          DIGEST_ARGS=$(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
           echo "Creating manifest with tags: $TAG_ARGS"
           echo "Using digests: $DIGEST_ARGS"
           docker buildx imagetools create $TAG_ARGS $DIGEST_ARGS
+
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ secrets.DOCKERHUB_NAMESPACE }}/${{ secrets.DOCKERHUB_REPOSITORY }}:latest
+          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:latest
