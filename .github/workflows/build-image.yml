@@ -58,16 +58,6 @@ jobs:
           platform=${{ matrix.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
