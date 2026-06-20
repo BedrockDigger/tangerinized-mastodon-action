@@ -84,6 +84,7 @@ jobs:
       - name: Copy Tangerine UI files and configure themes
         run: |
           cp -r ./tgui/mastodon/app/javascript/styles/* ./mastodon/app/javascript/styles
+          cp -r ./tgui/mastodon/config/locales/* ./mastodon/config/locales/
           cat >> ./mastodon/config/themes.yml <<'EOF'
           tangerineui: styles/tangerineui.scss
           tangerineui-purple: styles/tangerineui-purple.scss
